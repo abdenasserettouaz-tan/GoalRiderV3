@@ -1,0 +1,88 @@
+from pathlib import Path
+import re
+
+js_path = Path('unpacked/assets/smart-companion.js')
+html_path = Path('unpacked/assets/index.html')
+js = js_path.read_text(encoding='utf-8')
+html = html_path.read_text(encoding='utf-8')
+
+def rep(old, new, name):
+    global js
+    if old not in js:
+        raise SystemExit('missing marker: ' + name)
+    js = js.replace(old, new, 1)
+
+rep("let ui=null,busy=false,session=null,wllama=null,modelState='idle',modelProgress=0,modelStage='',modelError='';",
+    "let ui=null,busy=false,session=null,modelState='ready',modelProgress=100,modelStage='Online',modelError='';", 'state')
+rep("function fresh(){return {version:1,teacherXP:0,mastery:{},modelCached:false,lastMode:'ask',history:{ask:[],tutor:[]}};}",
+    "function fresh(){return {version:1,teacherXP:0,mastery:{},modelCached:false,apiKey:'',lastMode:'ask',history:{ask:[],tutor:[]}};}", 'fresh')
+rep("function sleep(){hideOnly();if(wllama){try{wllama.exit();}catch(_){}wllama=null;modelState='idle';}}",
+    "function sleep(){hideOnly();}", 'sleep')
+
+js, n = re.subn(
+    r"function top\(title,sub='مرافق يوسف الذكي'\)\{.*?\}\nfunction robot",
+    "function top(title,sub='مرافق يوسف الذكي'){return `<header class=\"smart-top\"><button class=\"smart-back\" data-smart=\"home\" aria-label=\"رجوع\">›</button><div><h1>${escS(title)}</h1><small>${escS(sub)}</small></div><span id=\"smartModelPill\" class=\"smart-model-pill ready\">Online · جاهز</span></header>`;}\nfunction robot",
+    js, count=1, flags=re.S)
+if n != 1: raise SystemExit('top patch failed')
+
+online_card = """function modelCard(){const ready=!!data.apiKey;return `<section class=\"smart-model-card\"><h3>🌐 نُور Online AI</h3><p id=\"smartModelStatus\">${ready?'متصل بالذكاء عبر الإنترنت ويعمل من خادم Goal Rider.':'يلزم إدخال مفتاح Gemini مرة واحدة من لوحة الوالدين.'}</p><div class=\"smart-install-note\">لا يوجد تنزيل Qwen ولا ملفات كبيرة. تحديثات سرعة نُور ونماذج Gemini تتم من الخادم دون تحديث APK.</div></section>`;}"""
+js, n = re.subn(r"function modelCard\(\)\{.*?\}\nfunction lessonOptions", online_card + "\nfunction lessonOptions", js, count=1, flags=re.S)
+if n != 1: raise SystemExit('modelCard patch failed')
+
+online_engine = r'''const AI_ENDPOINT='https://euccllpmhrxeagayvsgw.supabase.co/functions/v1/goal-rider-ai';
+const AI_APP='goal-rider-mobile-v1-2026';
+function learningSummary(){const rows=Object.values(data.mastery||{}).slice(-12).map(m=>`${m.title}: ${m.correct||0}/${m.answers||0} صحيح، ${m.explanations||0} شروحات`).join('؛ ');return `Teacher XP ${data.teacherXP||0}. ${rows||'لا توجد جلسات مسجلة بعد.'}`.slice(0,900);}
+async function aiReply(mode,text,l,web){
+  if(!data.apiKey)return null;
+  try{
+    let recent=(session?.messages||[]).slice(-9).filter(m=>m.role==='user'||m.role==='assistant');
+    if(recent.length&&recent[recent.length-1].role==='user'&&recent[recent.length-1].text===text)recent=recent.slice(0,-1);
+    const mapped=mode==='teacher'?'teacher':mode==='tutor'?'teach':mode==='quiz'?'quiz':'ask';
+    const subject=l?(B.subjects?.[l.subject]?.name||l.subject):'';
+    const body={mode:mapped,message:text,subject,lesson:l?.title||'',language:'auto',allowSearch:true,learningSummary:learningSummary(),history:recent.map(m=>({role:m.role,text:m.text})).slice(-8)};
+    const r=await fetch(AI_ENDPOINT,{method:'POST',headers:{'Content-Type':'application/json','x-goalrider-app':AI_APP,'x-gemini-key':data.apiKey},body:JSON.stringify(body)});
+    const d=await r.json().catch(()=>({}));
+    if(!r.ok)throw Error(d?.message||d?.details||d?.error||('HTTP '+r.status));
+    return stripThink(d?.reply||'');
+  }catch(e){console.error('Nur Online AI',e);return null;}
+}
+function updateModelUI(){const pill=$('smartModelPill'),st=$('smartModelStatus');if(pill){pill.className='smart-model-pill ready';pill.textContent=data.apiKey?'Online · جاهز':'Online · يحتاج مفتاح';}if(st)st.textContent=data.apiKey?'متصل بالذكاء عبر الإنترنت ويعمل من خادم Goal Rider.':'يلزم إدخال مفتاح Gemini مرة واحدة من لوحة الوالدين.';}
+'''
+js, n = re.subn(r"async function fetchWllamaModule\(\)\{.*?\nfunction localReply", online_engine + "\nfunction localReply", js, count=1, flags=re.S)
+if n != 1: raise SystemExit('AI engine patch failed')
+
+normal = r'''async function normalTurn(text){const l=session.lesson;const ai=await aiReply(session.mode,text,l,null);const fallback=localReply(session.mode,text,l,null);push('assistant',childify(ai||fallback));if(session.mode==='ask'){data.history.ask=session.messages.slice(-12);put();}else if(session.mode==='tutor'){data.history.tutor=session.messages.slice(-12);put();}}'''
+js, n = re.subn(r"async function normalTurn\(text\)\{.*?\}\nasync function submitText", normal + "\nasync function submitText", js, count=1, flags=re.S)
+if n != 1: raise SystemExit('normalTurn patch failed')
+
+js = js.replace("modelState==='ready'?'Qwen3 المحلي متصل بالمحادثة.':'محرك الدروس + البحث جاهز، وQwen3 اختياري.'",
+                "data.apiKey?'نُور Online متصل بالمحادثة.':'محرك الدروس جاهز. أضف مفتاح Gemini من لوحة الوالدين لتشغيل نُور Online.'")
+js, n = re.subn(r"async function install\(\)\{.*?\}\nfunction previewLesson", "async function install(){home();}\nfunction previewLesson", js, count=1, flags=re.S)
+if n != 1: raise SystemExit('install patch failed')
+
+old_parent = "try{const prev=renderParents;renderParents=function(){prev();if(parentUnlocked){const body=$('sheetBody');if(body)body.insertAdjacentHTML('afterbegin',`<div class=\"card\"><h3>🤖 المرافق الذكي · تعلّم يوسف</h3><p>${data.teacherXP||0} Teacher XP · ${Object.keys(data.mastery).length} دروس فيها أدلة تعلم</p>${btn('عرض ما تعلمه يوسف','smart-parent-report','secondary')}</div>`);}};}catch(_){ }"
+new_parent = "try{const prev=renderParents;renderParents=function(){prev();if(parentUnlocked){const body=$('sheetBody');if(body)body.insertAdjacentHTML('afterbegin',`<div class=\"card\"><h3>🤖 نُور · المرافق الذكي Online</h3><p>${data.apiKey?'متصل وجاهز':'أدخل مفتاح Gemini لتشغيل نُور'}</p><label class=\"label\" for=\"smartParentApiKey\">مفتاح Gemini للمرافق الذكي</label><input id=\"smartParentApiKey\" class=\"field\" type=\"password\" value=\"${escS(data.apiKey||'')}\" placeholder=\"AIza...\" autocomplete=\"off\"><button class=\"btn primary\" data-action=\"smart-api-save-parent\">حفظ الإعدادات</button><hr><h3>تعلّم يوسف</h3><p>${data.teacherXP||0} Teacher XP · ${Object.keys(data.mastery).length} دروس فيها أدلة تعلم</p>${btn('عرض ما تعلمه يوسف','smart-parent-report','secondary')}</div>`);}};}catch(_){ }"
+if old_parent not in js: raise SystemExit('parent injection marker missing')
+js = js.replace(old_parent, new_parent, 1)
+
+parent_click = "document.addEventListener('click',e=>{const el=e.target.closest('[data-action=\"smart-api-save-parent\"]');if(!el)return;e.preventDefault();e.stopImmediatePropagation();const k=String($('smartParentApiKey')?.value||'').trim();if(!k){toast('أدخل مفتاح Gemini أولاً');return;}data.apiKey=k;put();updateModelUI();toast('تم حفظ مفتاح Gemini وتشغيل نُور Online');renderParents();},true);\n"
+marker = "document.addEventListener('click',e=>{const el=e.target.closest('[data-action=\"smart-parent-report\"]');"
+if marker not in js: raise SystemExit('parent click marker missing')
+js = js.replace(marker, parent_click + marker, 1)
+
+js = js.replace('Qwen3 المحلي','نُور Online').replace('Qwen3 جاهز','Online جاهز')
+js_path.write_text(js, encoding='utf-8')
+
+domain='https://euccllpmhrxeagayvsgw.supabase.co'
+if domain not in html:
+    if "connect-src 'self'" in html:
+        html = html.replace("connect-src 'self'", f"connect-src 'self' {domain}", 1)
+    else:
+        raise SystemExit('CSP connect-src marker missing')
+html = html.replace('Goal Rider 6.9.4 · Smart Companion Engine Fix','Goal Rider 6.9.5 · Nur Online AI')
+html_path.write_text(html, encoding='utf-8')
+
+if 'AI_ENDPOINT' not in js or 'smart-api-save-parent' not in js:
+    raise SystemExit('online AI injection check failed')
+print('patched smart-companion.js', js_path.stat().st_size)
+print('patched index.html', html_path.stat().st_size)
