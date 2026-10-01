@@ -32,9 +32,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release delete goalrider-online-ai-v1 --yes --cleanup-tag || true
+          gh release delete goalrider-online-ai-v1 --repo "${GITHUB_REPOSITORY}" --yes --cleanup-tag || true
           gh release create goalrider-online-ai-v1 \
             GoalRider_Online_AI_Android11.apk \
+            --repo "${GITHUB_REPOSITORY}" \
             --target main \
             --title "Goal Rider Online AI v1" \
             --notes "Goal Rider Online AI test build for Android 11. Includes the online Nur companion interface."
