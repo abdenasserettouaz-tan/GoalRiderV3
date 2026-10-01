@@ -1,0 +1,41 @@
+name: Publish Goal Rider Online AI APK
+
+on:
+  push:
+    branches: [ "main" ]
+    paths:
+      - ".github/workflows/publish-online-ai-apk.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download successful Online AI artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api repos/${{ github.repository }}/actions/artifacts/11179837988/zip > /tmp/goalrider-ai.zip
+          rm -rf /tmp/goalrider-ai
+          mkdir -p /tmp/goalrider-ai
+          unzip -q /tmp/goalrider-ai.zip -d /tmp/goalrider-ai
+          find /tmp/goalrider-ai -maxdepth 2 -type f -ls
+          test -f /tmp/goalrider-ai/GoalRider_Online_AI_ANDROID11.apk
+
+      - name: Publish APK in repository
+        run: |
+          mkdir -p dist
+          cp /tmp/goalrider-ai/GoalRider_Online_AI_ANDROID11.apk dist/GoalRider_Online_AI_ANDROID11.apk
+          sha256sum dist/GoalRider_Online_AI_ANDROID11.apk > dist/GoalRider_Online_AI_ANDROID11.sha256
+          git config user.name "Goal Rider Build Bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add dist/GoalRider_Online_AI_ANDROID11.apk dist/GoalRider_Online_AI_ANDROID11.sha256
+          git commit -m "Publish Goal Rider Online AI APK [skip ci]"
+          git push
