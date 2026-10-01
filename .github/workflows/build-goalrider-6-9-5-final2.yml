@@ -1,0 +1,103 @@
+name: Build Goal Rider 6.9.5 Final2 Nur Online AI
+
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - ".github/workflows/build-goalrider-6-9-5-final2.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      APK_URL: "https://sdmntprnortheu.oaiusercontent.com/files/00000000-ce24-81f4-8941-e0b4e44e925a/raw?se=2026-10-01T18%3A54%3A50Z&sp=r&sv=2026-02-06&sr=b&scid=488c7e2e-cfa6-5ec6-b733-57325303dc73&skoid=c30e7ce7-1f51-4051-a377-288cdba21c02&sktid=a48cca56-e6da-484e-a814-9c849652bcb3&skt=2026-10-01T16%3A10%3A52Z&ske=2026-10-02T16%3A10%3A52Z&sks=b&skv=2026-02-06&sig=qHDyFUuZq8fI8%2BQ9DfuCGZwmYmYe14ElkeyprMmpbQg%3D"
+      JKS_URL: "https://sdmntprukwest.oaiusercontent.com/files/00000000-6bdc-8243-9c86-0a3eb152b3ff/raw?se=2026-10-01T18%3A55%3A03Z&sp=r&sv=2026-02-06&sr=b&scid=820151ff-2b08-5044-aae8-7e854d375d88&skoid=c30e7ce7-1f51-4051-a377-288cdba21c02&sktid=a48cca56-e6da-484e-a814-9c849652bcb3&skt=2026-10-01T11%3A53%3A41Z&ske=2026-10-02T11%3A53%3A41Z&sks=b&skv=2026-02-06&sig=I7roUzwOr0ukC4g/RnMN3uUMcfuj9tMWukmisKA7avQ%3D"
+      SIGN_PASS: ${{ secrets.GOALRIDER_SIGNING_PASSWORD }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download verified base and signing key
+        run: |
+          set -euo pipefail
+          curl --retry 3 --retry-delay 2 -fL "$APK_URL" -o base.apk
+          curl --retry 3 --retry-delay 2 -fL "$JKS_URL" -o GoalRider_V5_release.jks
+          test "$(stat -c%s base.apk)" -eq 4437506
+          test "$(stat -c%s GoalRider_V5_release.jks)" -eq 3044
+          unzip -tq base.apk
+          unzip -q base.apk -d unpacked
+
+      - name: Patch Nur Online AI
+        run: |
+          python3 buildtools/patch_nur_online.py
+          node --check unpacked/assets/smart-companion.js
+          grep -q "goal-rider-ai" unpacked/assets/smart-companion.js
+          grep -q "smart-api-save-parent" unpacked/assets/smart-companion.js
+          grep -q "euccllpmhrxeagayvsgw.supabase.co" unpacked/assets/index.html
+
+      - name: Repack and locate Android tools
+        run: |
+          set -euo pipefail
+          cp base.apk unsigned.apk
+          zip -q -d unsigned.apk 'META-INF/*' || true
+          (cd unpacked && zip -q -u ../unsigned.apk assets/index.html assets/smart-companion.js)
+          unzip -tq unsigned.apk
+          SDK="${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}"
+          BT=$(find "$SDK/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -1)
+          test -x "$BT/zipalign"
+          test -x "$BT/apksigner"
+          echo "BT=$BT" >> "$GITHUB_ENV"
+
+      - name: Align and sign with original Goal Rider certificate
+        run: |
+          set -euo pipefail
+          test -n "${SIGN_PASS:-}"
+          "$BT/zipalign" -f -p 4 unsigned.apk aligned.apk
+          "$BT/zipalign" -c 4 aligned.apk
+          "$BT/apksigner" sign \
+            --ks GoalRider_V5_release.jks \
+            --ks-key-alias goalriderv5 \
+            --ks-pass "pass:$SIGN_PASS" \
+            --key-pass "pass:$SIGN_PASS" \
+            --v1-signing-enabled true \
+            --v2-signing-enabled true \
+            --v3-signing-enabled true \
+            --out GoalRider_6_9_5_NUR_ONLINE_AI_ANDROID11.apk aligned.apk
+
+      - name: Verify APK and certificate
+        run: |
+          set -euo pipefail
+          "$BT/apksigner" verify --verbose --print-certs GoalRider_6_9_5_NUR_ONLINE_AI_ANDROID11.apk | tee verify.txt
+          grep -qi '8b07564a08978d77bc387090f3203b69b1b343055c7fec4d7a0d46dc0d9e4302' verify.txt
+          "$BT/zipalign" -c 4 GoalRider_6_9_5_NUR_ONLINE_AI_ANDROID11.apk
+          unzip -tq GoalRider_6_9_5_NUR_ONLINE_AI_ANDROID11.apk
+          sha256sum GoalRider_6_9_5_NUR_ONLINE_AI_ANDROID11.apk | tee GoalRider_6_9_5_NUR_ONLINE_AI_ANDROID11.sha256
+          ls -lh GoalRider_6_9_5_NUR_ONLINE_AI_ANDROID11.apk
+
+      - name: Upload verified APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: GoalRider-6.9.5-NUR-ONLINE-AI-Android11-FINAL
+          path: |
+            GoalRider_6_9_5_NUR_ONLINE_AI_ANDROID11.apk
+            GoalRider_6_9_5_NUR_ONLINE_AI_ANDROID11.sha256
+            verify.txt
+          retention-days: 30
+
+      - name: Publish direct APK release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete goalrider-6.9.5-nur-online-ai-final --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag || true
+          gh release create goalrider-6.9.5-nur-online-ai-final \
+            GoalRider_6_9_5_NUR_ONLINE_AI_ANDROID11.apk \
+            GoalRider_6_9_5_NUR_ONLINE_AI_ANDROID11.sha256 \
+            verify.txt \
+            --repo "$GITHUB_REPOSITORY" \
+            --target main \
+            --title "Goal Rider 6.9.5 · Nur Online AI · Final" \
+            --notes "Goal Rider 6.9.4 upgraded to Nur Online AI while preserving the original Goal Rider signing certificate. Android 11 compatible."
