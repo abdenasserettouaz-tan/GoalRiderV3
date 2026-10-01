@@ -16,15 +16,11 @@ jobs:
           APK_URL: "https://sdmntprnortheu.oaiusercontent.com/files/00000000-8f5c-81f4-8290-9bee3c8c06c3/raw?se=2026-10-01T18%3A36%3A56Z&sp=r&sv=2026-02-06&sr=b&scid=dd787c1c-d484-5901-8bed-d04281325750&skoid=c30e7ce7-1f51-4051-a377-288cdba21c02&sktid=a48cca56-e6da-484e-a814-9c849652bcb3&skt=2026-10-01T18%3A31%3A46Z&ske=2026-10-02T18%3A31%3A46Z&sks=b&skv=2026-02-06&sig=rvkIHKiHDxK58PMJqE67QcYvSGS1NYdJAHloW%2B7vRs0%3D"
         run: |
           curl -fL "$APK_URL" -o base.apk
-          ls -lh base.apk
-          test "$(stat -c%s base.apk)" -gt 4400000
           unzip -q base.apk -d unpacked
+          test -s unpacked/assets/smart-companion.js
 
-      - name: Inspect Smart Companion implementation
+      - name: Dump Smart Companion implementation
         run: |
-          echo '=== relevant files ==='
-          find unpacked/assets -maxdepth 2 -type f | sort | head -100
-          echo '=== AI symbols ==='
-          grep -n -E "makeWllama|ensureModel|loadModelFile|smartModelFile|Qwen|المرافق الذكي|أنا المعل|Teacher XP|smartCompanion|companion" unpacked/assets/index.html | head -200 || true
-          echo '=== fetch / chat symbols ==='
-          grep -n -E "sendSmart|smartSend|smartInput|smartChat|smartMode|modelStage|wllama" unpacked/assets/index.html | head -200 || true
+          echo '=== SMART COMPANION JS START ==='
+          cat unpacked/assets/smart-companion.js
+          echo '=== SMART COMPANION JS END ==='
