@@ -1,0 +1,185 @@
+name: Build Goal Rider 6.9.5 Nur Online AI
+
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - ".github/workflows/build-goalrider-6-9-5-online-ai.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      APK_URL: "https://sdmntprdenmarkeast.oaiusercontent.com/files/00000000-8b50-8210-8479-be425d208340/raw?se=2026-10-01T18%3A41%3A12Z&sp=r&sv=2026-02-06&sr=b&scid=dd6f7da2-1917-5fe5-9302-9d5ada074464&skoid=c30e7ce7-1f51-4051-a377-288cdba21c02&sktid=a48cca56-e6da-484e-a814-9c849652bcb3&skt=2026-10-01T18%3A10%3A49Z&ske=2026-10-02T18%3A10%3A49Z&sks=b&skv=2026-02-06&sig=YZcQgIgcAdwVXGdm9oFToJm9oeC6qN9qXyDraxYfgh0%3D"
+      JKS_URL: "https://sdmntprdenmarkeast.oaiusercontent.com/files/00000000-ef0c-8210-88ad-d6adc88e0b28/raw?se=2026-10-01T18%3A41%3A19Z&sp=r&sv=2026-02-06&sr=b&scid=c8a56f5e-42a0-5ccf-a365-5028058341b8&skoid=c30e7ce7-1f51-4051-a377-288cdba21c02&sktid=a48cca56-e6da-484e-a814-9c849652bcb3&skt=2026-10-01T09%3A08%3A54Z&ske=2026-10-02T09%3A08%3A54Z&sks=b&skv=2026-02-06&sig=oJI3%2BF2UJ/lQFoNxIS/nBwbjzvrLrfR69Rpjwq4Mg%2BI%3D"
+      SIGN_PASS: ${{ secrets.GOALRIDER_SIGNING_PASSWORD }}
+
+    steps:
+      - name: Download verified Goal Rider 6.9.4 base
+        run: |
+          curl -fL "$APK_URL" -o base.apk
+          curl -fL "$JKS_URL" -o GoalRider_V5_release.jks
+          test "$(stat -c%s base.apk)" -eq 4437506
+          test "$(stat -c%s GoalRider_V5_release.jks)" -eq 3044
+          unzip -tq base.apk
+          unzip -q base.apk -d unpacked
+          test -s unpacked/assets/smart-companion.js
+
+      - name: Replace local Qwen with Nur Online AI
+        run: |
+          cat > patch.py <<'PY'
+          from pathlib import Path
+          import re
+
+          js_path=Path('unpacked/assets/smart-companion.js')
+          html_path=Path('unpacked/assets/index.html')
+          js=js_path.read_text(encoding='utf-8')
+          html=html_path.read_text(encoding='utf-8')
+
+          def must_replace(old,new,name):
+              global js
+              if old not in js:
+                  raise SystemExit(f'missing marker: {name}')
+              js=js.replace(old,new,1)
+
+          must_replace("let ui=null,busy=false,session=null,wllama=null,modelState='idle',modelProgress=0,modelStage='',modelError='';",
+                       "let ui=null,busy=false,session=null,modelState='ready',modelProgress=100,modelStage='Online',modelError='';",'state')
+          must_replace("function fresh(){return {version:1,teacherXP:0,mastery:{},modelCached:false,lastMode:'ask',history:{ask:[],tutor:[]}};}",
+                       "function fresh(){return {version:1,teacherXP:0,mastery:{},modelCached:false,apiKey:'',lastMode:'ask',history:{ask:[],tutor:[]}};}",'fresh')
+          must_replace("function sleep(){hideOnly();if(wllama){try{wllama.exit();}catch(_){}wllama=null;modelState='idle';}}",
+                       "function sleep(){hideOnly();}",'sleep')
+
+          js,n=re.subn(r"function top\(title,sub='مرافق يوسف الذكي'\)\{.*?\}\nfunction robot",
+          """function top(title,sub='مرافق يوسف الذكي'){return `<header class=\"smart-top\"><button class=\"smart-back\" data-smart=\"home\" aria-label=\"رجوع\">›</button><div><h1>${escS(title)}</h1><small>${escS(sub)}</small></div><span id=\"smartModelPill\" class=\"smart-model-pill ready\">Online · جاهز</span></header>`;}\nfunction robot""",js,count=1,flags=re.S)
+          if n!=1: raise SystemExit('top patch failed')
+
+          online_card="""function modelCard(){const ready=!!data.apiKey;return `<section class=\"smart-model-card\"><h3>🌐 نُور Online AI</h3><p id=\"smartModelStatus\">${ready?'متصل بالذكاء عبر الإنترنت. سرعة نور وجودته تُحدّثان من الخادم دون تحديث اللعبة.':'أدخل مفتاح Gemini مرة واحدة لتشغيل نور Online.'}</p><label class=\"smart-label\" for=\"smartApiKey\">مفتاح Gemini</label><input class=\"smart-field\" id=\"smartApiKey\" type=\"password\" value=\"${escS(data.apiKey||'')}\" placeholder=\"AIza...\" autocomplete=\"off\"><button class=\"smart-wide primary\" data-smart=\"api-save\">${ready?'✓ حفظ / تحديث المفتاح':'حفظ وتشغيل نور'}</button><div class=\"smart-install-note\">لا يوجد تنزيل Qwen ولا ملفات كبيرة. المفتاح يبقى محفوظًا على هذا الهاتف ويُرسل فقط إلى بوابة Goal Rider AI.</div></section>`;}"""
+          js,n=re.subn(r"function modelCard\(\)\{.*?\}\nfunction lessonOptions",online_card+"\nfunction lessonOptions",js,count=1,flags=re.S)
+          if n!=1: raise SystemExit('modelCard patch failed')
+
+          online_ai=r'''const AI_ENDPOINT='https://euccllpmhrxeagayvsgw.supabase.co/functions/v1/goal-rider-ai';
+          const AI_APP='goal-rider-mobile-v1-2026';
+          function learningSummary(){const rows=Object.values(data.mastery||{}).slice(-12).map(m=>`${m.title}: ${m.correct||0}/${m.answers||0} صحيح، ${m.explanations||0} شروحات`).join('؛ ');return `Teacher XP ${data.teacherXP||0}. ${rows||'لا توجد جلسات مسجلة بعد.'}`.slice(0,900);}
+          async function aiReply(mode,text,l,web){
+            if(!data.apiKey)return null;
+            try{
+              let recent=(session?.messages||[]).slice(-9).filter(m=>m.role==='user'||m.role==='assistant');
+              if(recent.length&&recent[recent.length-1].role==='user'&&recent[recent.length-1].text===text)recent=recent.slice(0,-1);
+              const mapped=mode==='teacher'?'teacher':mode==='tutor'?'teach':mode==='quiz'?'quiz':'ask';
+              const subject=l?(B.subjects?.[l.subject]?.name||l.subject):'';
+              const body={mode:mapped,message:text,subject,lesson:l?.title||'',language:'auto',allowSearch:true,learningSummary:learningSummary(),history:recent.map(m=>({role:m.role,text:m.text})).slice(-8)};
+              const r=await fetch(AI_ENDPOINT,{method:'POST',headers:{'Content-Type':'application/json','x-goalrider-app':AI_APP,'x-gemini-key':data.apiKey},body:JSON.stringify(body)});
+              const d=await r.json().catch(()=>({}));
+              if(!r.ok)throw Error(d?.message||d?.details||d?.error||('HTTP '+r.status));
+              return stripThink(d?.reply||'');
+            }catch(e){console.error('Nur Online AI',e);return null;}
+          }
+          '''
+          js,n=re.subn(r"async function fetchWllamaModule\(\)\{.*?\nfunction localReply",online_ai+"\nfunction localReply",js,count=1,flags=re.S)
+          if n!=1: raise SystemExit('AI engine patch failed')
+
+          normal=r'''async function normalTurn(text){const l=session.lesson;const ai=await aiReply(session.mode,text,l,null);const fallback=localReply(session.mode,text,l,null);push('assistant',childify(ai||fallback));if(session.mode==='ask'){data.history.ask=session.messages.slice(-12);put();}else if(session.mode==='tutor'){data.history.tutor=session.messages.slice(-12);put();}}'''
+          js,n=re.subn(r"async function normalTurn\(text\)\{.*?\}\nasync function submitText",normal+"\nasync function submitText",js,count=1,flags=re.S)
+          if n!=1: raise SystemExit('normalTurn patch failed')
+
+          js=js.replace("modelState==='ready'?'Qwen3 المحلي متصل بالمحادثة.':'محرك الدروس + البحث جاهز، وQwen3 اختياري.'","data.apiKey?'نُور Online متصل بالمحادثة.':'محرك الدروس جاهز. أضف مفتاح Gemini من الصفحة الرئيسية لتشغيل نور Online.'")
+          js,n=re.subn(r"async function install\(\)\{.*?\}\nfunction previewLesson","async function install(){home();}\nfunction previewLesson",js,count=1,flags=re.S)
+          if n!=1: raise SystemExit('install patch failed')
+
+          marker="else if(a==='model-install')install();"
+          if marker not in js: raise SystemExit('click marker missing')
+          save_branch="else if(a==='api-save'){const k=String($('smartApiKey')?.value||'').trim();if(!k){toast('أدخل مفتاح Gemini أولاً');return;}data.apiKey=k;put();toast('تم تشغيل نُور Online');home();}"
+          js=js.replace(marker,save_branch+marker,1)
+
+          # Remove stale wording left in inactive legacy branches and title.
+          js=js.replace('Qwen3 المحلي','نُور Online').replace('Qwen3 جاهز','Online جاهز')
+          js_path.write_text(js,encoding='utf-8')
+
+          domain='https://euccllpmhrxeagayvsgw.supabase.co'
+          if domain not in html:
+              if "connect-src 'self'" in html:
+                  html=html.replace("connect-src 'self'",f"connect-src 'self' {domain}",1)
+              else:
+                  raise SystemExit('CSP connect-src marker missing')
+          html=html.replace('Goal Rider 6.9.4 · Smart Companion Engine Fix','Goal Rider 6.9.5 · Nur Online AI')
+          html_path.write_text(html,encoding='utf-8')
+
+          if 'AI_ENDPOINT' not in js or 'api-save' not in js: raise SystemExit('online AI not injected')
+          print('patched JS bytes',js_path.stat().st_size)
+          print('patched HTML bytes',html_path.stat().st_size)
+          PY
+          python3 patch.py
+          node --check unpacked/assets/smart-companion.js
+          grep -q "goal-rider-ai" unpacked/assets/smart-companion.js
+          grep -q "euccllpmhrxeagayvsgw.supabase.co" unpacked/assets/index.html
+
+      - name: Repack APK preserving original resources
+        run: |
+          cp base.apk unsigned.apk
+          zip -q -d unsigned.apk 'META-INF/*' || true
+          (cd unpacked && zip -q -u ../unsigned.apk assets/index.html assets/smart-companion.js)
+          unzip -tq unsigned.apk
+
+      - name: Locate Android signing tools
+        run: |
+          SDK="${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}"
+          BT=$(find "$SDK/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -1)
+          test -x "$BT/zipalign"
+          test -x "$BT/apksigner"
+          echo "BT=$BT" >> "$GITHUB_ENV"
+
+      - name: Align APK
+        run: |
+          "$BT/zipalign" -f -p 4 unsigned.apk aligned.apk
+          "$BT/zipalign" -c -v 4 aligned.apk
+
+      - name: Sign with original Goal Rider certificate
+        run: |
+          if [ -z "$SIGN_PASS" ]; then
+            echo "::error::GitHub secret GOALRIDER_SIGNING_PASSWORD is not configured"
+            exit 2
+          fi
+          "$BT/apksigner" sign \
+            --ks GoalRider_V5_release.jks \
+            --ks-key-alias goalriderv5 \
+            --ks-pass "pass:$SIGN_PASS" \
+            --key-pass "pass:$SIGN_PASS" \
+            --v1-signing-enabled true \
+            --v2-signing-enabled true \
+            --v3-signing-enabled true \
+            --out GoalRider_6_9_5_NUR_ONLINE_AI_ANDROID11.apk aligned.apk
+
+      - name: Verify final APK and certificate
+        run: |
+          "$BT/apksigner" verify --verbose --print-certs GoalRider_6_9_5_NUR_ONLINE_AI_ANDROID11.apk | tee verify.txt
+          grep -qi '8b07564a08978d77bc387090f3203b69b1b343055c7fec4d7a0d46dc0d9e4302' verify.txt
+          unzip -tq GoalRider_6_9_5_NUR_ONLINE_AI_ANDROID11.apk
+          sha256sum GoalRider_6_9_5_NUR_ONLINE_AI_ANDROID11.apk | tee GoalRider_6_9_5_NUR_ONLINE_AI_ANDROID11.sha256
+          ls -lh GoalRider_6_9_5_NUR_ONLINE_AI_ANDROID11.apk
+
+      - name: Upload verified APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: GoalRider-6.9.5-NUR-ONLINE-AI-Android11
+          path: |
+            GoalRider_6_9_5_NUR_ONLINE_AI_ANDROID11.apk
+            GoalRider_6_9_5_NUR_ONLINE_AI_ANDROID11.sha256
+            verify.txt
+          retention-days: 30
+
+      - name: Publish direct APK release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete goalrider-6.9.5-nur-online-ai --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag || true
+          gh release create goalrider-6.9.5-nur-online-ai \
+            GoalRider_6_9_5_NUR_ONLINE_AI_ANDROID11.apk \
+            GoalRider_6_9_5_NUR_ONLINE_AI_ANDROID11.sha256 \
+            --repo "$GITHUB_REPOSITORY" \
+            --target main \
+            --title "Goal Rider 6.9.5 · Nur Online AI" \
+            --notes "Latest Goal Rider 6.9.4 content upgraded to Nur Online AI. Android 11. Signed with the original Goal Rider V5 certificate and verified by apksigner."
